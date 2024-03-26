@@ -285,6 +285,8 @@ struct kvm_vcpu {
 	struct kvm_vcpu_stat stat;
 	unsigned int halt_poll_ns;
 	bool valid_wakeup;
+    // to ensure the fairness of vcpu
+	unsigned long long debts;
 
 #ifdef CONFIG_HAS_IOMEM
 	int mmio_needed;
@@ -442,6 +444,213 @@ struct kvm_memslots {
 	int used_slots;
 	struct kvm_memory_slot memslots[];
 };
+// 一个先进先出的队列的节点
+struct fifo_node{
+	int data;
+	struct fifo_node *next;
+};
+ 
+// 一个先进先出的队列
+struct fifo_queue{
+	struct fifo_node *front;
+	struct fifo_node *rear;
+};
+ 
+// 创建队列
+static inline struct fifo_queue *create_thy_queue(void)
+{
+	struct fifo_queue * myqueue = (struct fifo_queue *)kzalloc(sizeof(struct fifo_queue), GFP_KERNEL);
+	myqueue->front = NULL;
+	myqueue->rear = NULL;
+ 
+	return myqueue;
+}
+
+// 得到队列头部
+static inline int get_thy_head_queue(struct fifo_queue *myqueue)
+{
+	if (NULL == myqueue){
+		return -1;
+	}
+	if (NULL == myqueue->front){
+		return -1;
+	}
+ 
+	return myqueue->front->data;
+}
+
+// 得到队列尾部
+static inline int get_thy_rear_queue(struct fifo_queue *myqueue)
+{
+	if (NULL == myqueue){
+		return -1;
+	}
+	if (NULL == myqueue->rear){
+		return -1;
+	}
+ 
+	return myqueue->rear->data;
+}
+
+
+static inline struct fifo_queue *del_thy_if_exist(struct fifo_queue *myqueue, int data)
+{
+	if (NULL == myqueue){
+		return NULL;
+	}
+	struct fifo_node *p_node = NULL;
+	struct fifo_node *p_pre_node = NULL;
+	p_node = myqueue->front;
+	if (NULL == p_node){
+		return NULL;
+	}
+	if (p_node->data == data){
+		myqueue->front = myqueue->front->next;
+		if (myqueue->front == NULL){
+			myqueue->rear = NULL;
+		}
+		kfree(p_node);
+		return myqueue;
+	}
+	p_pre_node = p_node;
+	p_node = p_node->next;
+	while (p_node != myqueue->rear->next)
+	{
+		if (p_node->data == data){
+			p_pre_node->next = p_node->next;
+			if (p_node == myqueue->rear){
+				myqueue->rear = p_pre_node;
+			}
+			kfree(p_node);
+			return myqueue;
+		}
+		p_pre_node = p_node;
+		p_node = p_node->next;
+	}
+ 
+	return myqueue;
+}
+
+// 插入队列尾部
+static inline struct fifo_queue *insert_thy_queue_rear(struct fifo_queue *myqueue, int data)
+{
+	if (NULL == myqueue){
+		return NULL;
+	}
+	struct fifo_node *new_node = NULL;
+	new_node = (struct fifo_node *)kzalloc(sizeof(struct fifo_node), GFP_KERNEL);//create a new node
+	new_node->data = data;
+	new_node->next = NULL;
+ 
+	if (myqueue->rear == NULL){//if the queue is empty
+		myqueue->front = myqueue->rear = new_node;
+	}
+	else{
+		myqueue->rear->next = new_node;
+		myqueue->rear = new_node;//move queue rear pointer to new_node
+	}
+ 
+	return myqueue;
+}
+
+// 插入队列头部
+static inline struct fifo_queue *insert_thy_queue_head(struct fifo_queue *myqueue, int data)
+{
+	if (NULL == myqueue){
+		return NULL;
+	}
+	struct fifo_node *new_node = NULL;
+	new_node = (struct fifo_node *)kzalloc(sizeof(struct fifo_node), GFP_KERNEL);//create a new node
+	new_node->data = data;
+	new_node->next = NULL;
+ 
+	if (myqueue->front == NULL){//if the queue is empty
+		myqueue->front = myqueue->rear = new_node;
+	}
+	else{
+		new_node->next = myqueue->front;
+		myqueue->front = new_node;//move queue rear pointer to new_node
+	}
+ 
+	return myqueue;
+}
+
+// 删除队列
+static inline struct fifo_queue *delete_thy_queue(struct fifo_queue *myqueue)
+{
+	struct fifo_node *p_node = NULL;
+	p_node = myqueue->front;
+	if (NULL == p_node){
+		return NULL;
+	}
+	else{
+		myqueue->front = myqueue->front->next;
+		if (myqueue->front == NULL){
+			myqueue->rear = NULL;
+		}
+		kfree(p_node);
+	}
+ 
+	return myqueue;
+}
+
+// 获取队列长度
+static inline int get_thy_queue_length(struct fifo_queue *myqueue)
+{
+	struct fifo_node *p_node = NULL;
+	int len = 0;
+ 
+	p_node = myqueue->front;
+	if (NULL != p_node){
+		len = 1;
+	}
+	while (p_node != myqueue->rear)
+	{
+		p_node = p_node->next;
+		len++;
+	}
+ 
+	return len;
+}
+ 
+// 加入vCPU
+static inline struct fifo_queue *add_thy_vcpu(struct fifo_queue *myqueue, int data)
+{
+	if (NULL == myqueue){
+		return NULL;
+	}
+	if (get_thy_queue_length(myqueue) == 0){
+		myqueue = insert_thy_queue_rear(myqueue, data);
+	}
+	else{
+		myqueue = insert_thy_queue_head(myqueue, data);
+	}
+ 
+	return myqueue;
+}
+
+// 得到vCPU
+static inline int get_thy_vcpu(struct fifo_queue *myqueue)
+{
+	if (NULL == myqueue){
+		return -1;
+	}
+	if (get_thy_queue_length(myqueue) == 0){
+		return -1;
+	}
+	else{
+		return get_thy_rear_queue(myqueue);
+	}
+}
+
+// 删除vCPU
+static inline struct fifo_queue *del_thy_vcpu(struct fifo_queue *myqueue, int data)
+{
+	if (NULL == myqueue){
+		return NULL;
+	}
+    return del_thy_if_exist(myqueue, data);
+}
 
 struct kvm {
 	spinlock_t mmu_lock;
@@ -462,6 +671,13 @@ struct kvm {
 	struct list_head vm_list;
 	struct mutex lock;
 	struct kvm_io_bus __rcu *buses[KVM_NR_BUSES];
+
+	// 先进先出的活跃vCPU队列，队列中每一个节点存放的是vCPU在vcpus数组中的索引
+	struct fifo_queue *active_vcpus;
+
+	// 先进先出的非活跃vCPU队列，队列中每一个节点存放的是vCPU在vcpus数组中的索引
+	struct fifo_queue *inactive_vcpus;
+	
 #ifdef CONFIG_HAVE_KVM_EVENTFD
 	struct {
 		spinlock_t        lock;
@@ -508,6 +724,12 @@ struct kvm {
 //PATCH TONG FOR BOOSTING
 	unsigned long long debts; 
 	int debts_sync; 
+
+// every vm has a guaranteed runtime
+	unsigned long long guaranteed_runtime;
+
+// vm desires more runtime because of IO vCPUs
+	unsigned long long desire_runtime;
 };
 
 #define kvm_err(fmt, ...) \

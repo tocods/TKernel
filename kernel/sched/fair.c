@@ -4404,7 +4404,7 @@ static void set_skip_buddy(struct sched_entity *se);
 extern int cfs_print_flag;
 extern int vcfs_timer;
 extern int vcfs_timer2;
-
+extern int thy_print_flag;
 
 //TODO  OCT 3 2022 Tong at home: also count the time if it reschedule natually. 
 // OCT 13  Tong
@@ -4492,12 +4492,16 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 		current->running_io = current->lucky_guy;
 		current->boost_heap++; //increase confidence 
 		io_vcpu_mark = 1;
+		if(thy_print_flag)
+			printk("Check_Preempt_Tick: IO vCPU :%d , running_io:%d, lucky_guy:%d, current_possible_io_task:%d\n",io_vcpu_mark, current->running_io, current->lucky_guy, current->possible_io_task);
 	} 
 	if (delta_exec > ideal_runtime) {
         //If passed to here, which means I used all of my lucky already
   //      trace_sched_vcpu_runtime2(curtask, delta_exec, ideal_runtime);
 		if(vcfs_timer3)
 			current->mismatch = 0;
+		if((current->flags & PF_VCPU) && thy_print_flag)
+			printk("Check_Preempt_Tick: need to resched_curr, delta_exec:%d, ideal_runtime:%d\n", delta_exec, ideal_runtime);
 		resched_curr(rq_of(cfs_rq));
 
 		/*
@@ -4526,6 +4530,8 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
         if(current->gcurrent_ptr!=current->possible_io_task && get_debts(current) > 48000000)
         {
 			possible_io=0;
+			if(thy_print_flag)
+				printk("Check_Preempt_Tick: MISMATCH, current->gcurrent_ptr:%d, current->possible_io_task:%d, get_debts:%d\n",current->gcurrent_ptr, current->possible_io_task, get_debts(current));
 //            trace_sched_vcpu_runtime4(curtask, delta, ideal_runtime);
         }
         // ------> MATCH, WE MARK IT AS POSSIBLE IO

@@ -761,6 +761,8 @@ static struct kvm *kvm_create_vm(unsigned long type)
 	spin_lock_init(&kvm->mmu_lock);
 	mmgrab(current->mm);
 	kvm->mm = current->mm;
+	kvm->active_vcpus = create_thy_queue();
+	kvm->inactive_vcpus = create_thy_queue();
 	kvm_eventfd_init(kvm);
 	mutex_init(&kvm->lock);
 	mutex_init(&kvm->irq_lock);
@@ -4793,6 +4795,11 @@ struct kvm_vcpu *preempt_notifier_to_vcpu(struct preempt_notifier *pn)
 static void kvm_sched_in(struct preempt_notifier *pn, int cpu)
 {
 	struct kvm_vcpu *vcpu = preempt_notifier_to_vcpu(pn);
+	//将得到cpu资源的vcpu插入到队列中
+	struct fifo_queue *q_after_insert = add_thy_vcpu(vcpu->kvm->active_vcpus, vcpu->vcpu_idx);
+	vcpu->kvm->active_vcpus = q_after_insert;
+	struct fifo_queue *q_after_remove = del_thy_vcpu(vcpu->kvm->inactive_vcpus, vcpu->vcpu_idx);
+	vcpu->kvm->inactive_vcpus = q_after_remove;
 
 	WRITE_ONCE(vcpu->preempted, false);
 	WRITE_ONCE(vcpu->ready, false);
@@ -4806,6 +4813,11 @@ static void kvm_sched_out(struct preempt_notifier *pn,
 			  struct task_struct *next)
 {
 	struct kvm_vcpu *vcpu = preempt_notifier_to_vcpu(pn);
+
+	struct fifo_queue *q_after_insert = add_thy_vcpu(vcpu->kvm->inactive_vcpus, vcpu->vcpu_idx);
+	vcpu->kvm->inactive_vcpus = q_after_insert;
+	struct fifo_queue *q_after_remove = del_thy_vcpu(vcpu->kvm->active_vcpus, vcpu->vcpu_idx);
+	vcpu->kvm->active_vcpus = q_after_remove;
 
 	if (current->state == TASK_RUNNING) {
 		WRITE_ONCE(vcpu->preempted, true);

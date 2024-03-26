@@ -23,6 +23,7 @@ EXPORT_SYMBOL(debts_lock);
 DECLARE_HASHTABLE(vvtbl,10);
 int vcfs_timer=0;
 int vcfs_timer2=0;
+int thy_print_flag=0;
 static int _counter, _counter2;
 static struct vcpu_io *vcpu_list;
 static struct kvm_irq_vcpu *irq_list;
@@ -160,14 +161,36 @@ int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 	}
 	else
 	{
-		kvm_for_each_vcpu(i, vcpu, kvm) {
-			IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
-			if(sched_check_task_is_running(IO_vcpu))
-			{
-				ret = 1 << vcpu->vcpu_id;
-				vcpuID=vcpu->vcpu_id;
-				irq_vcpu=vcpu->pid->numbers[0].nr;
-				break;
+		int if_find = 0;
+		int vcpu_fifo;
+		if(kvm->active_vcpus == NULL) {
+			printk("active vcpus is null\n");
+		} else {
+			vcpu_fifo = get_thy_vcpu(kvm->active_vcpus);
+			if(vcpu_fifo == -1) {
+				printk("No active vcpus\n");
+			} else {
+				struct kvm_vcpu *vcpu_find = kvm->vcpus[vcpu_fifo];
+				IO_vcpu = find_get_task_by_vpid(vcpu_find->pid->numbers[0].nr);
+				if(sched_check_task_is_running(IO_vcpu))
+				{
+					ret = 1 << vcpu->vcpu_id;
+					irq_vcpu=vcpu_find->pid->numbers[0].nr;
+					vcpuID=vcpu_find->vcpu_id;
+					if_find = 1;
+				}
+			}
+		}
+		if(if_find == 0) {
+			kvm_for_each_vcpu(i, vcpu, kvm) {
+				IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
+				if(sched_check_task_is_running(IO_vcpu))
+				{
+					ret = 1 << vcpu->vcpu_id;
+					vcpuID=vcpu->vcpu_id;
+					irq_vcpu=vcpu->pid->numbers[0].nr;
+					break;
+				}
 			}
 		}
 	}
@@ -526,6 +549,8 @@ EXPORT_SYMBOL(vcfs_timer);
 EXPORT_SYMBOL(vcfs_timer2);
 EXPORT_SYMBOL(vcfs_timer4);
 
+EXPORT_SYMBOL(thy_print_flag);
+
 EXPORT_SYMBOL(fake_yield_flag);
 EXPORT_SYMBOL(IRQ_redirect);
 EXPORT_SYMBOL(IRQ_redirect_noboost);
@@ -597,6 +622,16 @@ static int time_check6(struct seq_file *m, void *v)
             burrito_flag3=1;
         seq_printf(m, "burrito_flag3 %d\n",burrito_flag3);
         return 0;
+}
+
+static int if_printk(struct seq_file *m, void *v)
+{
+		if(thy_print_flag)
+				thy_print_flag=0;
+		else
+				thy_print_flag=1;
+		seq_printf(m, "thy_print_flag %d\n",thy_print_flag);
+		return 0;
 }
 
 static int fake_yield(struct seq_file *m, void *v)
@@ -900,6 +935,7 @@ static int __init proc_cmdline_init(void)
 	proc_create_single("Fake_yield_flag",0 , NULL, fake_yield);
     proc_create_single("Vcfs_timer",0 , NULL, time_check);
     proc_create_single("Vcfs_timer2",0 , NULL, time_check2);
+	proc_create_single("Thy_print_flag", 0, NULL, if_printk);
     proc_create_single("Vcfs_timer3",0 , NULL, time_check3);
 	proc_create_single("Vcfs_timer4",0 , NULL, time_check44);
 
