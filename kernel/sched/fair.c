@@ -11869,18 +11869,3 @@ void sched_extend_life(struct task_struct *tsk)
 
 }
 EXPORT_SYMBOL_GPL(sched_extend_life);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -24,6 +24,9 @@ DECLARE_HASHTABLE(vvtbl,10);
 int vcfs_timer=0;
 int vcfs_timer2=0;
 int thy_print_flag=0;
+int HIGH = 1;
+int LOW = 2;
+int UNLINE = 0;
 static int _counter, _counter2;
 static struct vcpu_io *vcpu_list;
 static struct kvm_irq_vcpu *irq_list;
@@ -139,10 +142,145 @@ int check_irq_vcpu(int vcpu_vpid, int curr_kvm)
 	return 0;
 
 }
+
+
+bool check_vcpu_is_online(struct kvm_vcpu *vcpu) {
+	return sched_check_task_is_running(find_get_task_by_vpid(vcpu->pid->numbers[0].nr));
+}
+
+// help rebalance the vcpus in the kvm
+struct vcpu_runtime_record {
+	unsigned long long runtime;
+	int vcpu_idx;
+	int state;
+	struct hlist_node hnode;
+	struct list_head lnode;
+};
+
+int cmpfunc (const void * a, const void * b)
+{
+    struct vcpu_runtime_record *da1 = (struct vcpu_runtime_record *)a;
+    struct vcpu_runtime_record *da2 = (struct vcpu_runtime_record *)b;
+ 
+    if(da1->runtime > da2->runtime)
+        return 1;
+    else if(da1->runtime < da2->runtime)
+        return -1;
+    else
+        return 0;
+}
+
+void irq_high2low(struct vcpu_runtime_record *high, struct vcpu_runtime_record *lows, struct kvm *kvm, unsigned long long avg) {
+	unsigned long long runtime = 0;
+	struct list_head *pos;
+	struct vcpu_runtime_record *entry;
+	for(int i = 0; i < KVM_IOAPIC_NUM_PINS; i++) {
+		unsigned long long runtime = kvm->tocod_irq_runtime_map->entries[i].runtime;
+		int idx = kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx;
+		if(idx != high->vcpu_idx)
+			continue;
+		if(runtime != -1) {
+			int if_remap = 0;
+			list_for_each(pos,&lows->lnode)
+			{
+				entry=list_entry(pos,struct vcpu_runtime_record, lnode);
+				if(entry->runtime + runtime < avg_runtime) {
+					entry->runtime += runtime;
+					kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx = entry->vcpu_idx;
+					if_remap = 1;
+					break;
+				} else {
+					entry->runtime += avg_runtime;
+					kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx = entry->vcpu_idx;
+					if_remap = 1;
+					list_del(&entry->lnode);
+					break;
+				}
+			}
+			if(if_remap) {
+				high->runtime -= runtime;
+				if(high->runtime > avg_runtime) {
+					continue;
+				}
+				break;
+			} 
+		}
+	}
+}
+
+int kvm_remap_for_balance(struct kvm *kvm) {
+	int vcpu_num = atomic_read(&kvm->online_vcpus);
+	struct vcpu_runtime_record *vcpu_runtimes;
+	vcpu_runtimes = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
+    unsigned long long runtime = 0;
+	for(int i = 0; i < vcpu_num; i++) {
+		if(check_vcpu_is_online(kvm->vcpus[i])){
+			struct vcpu_runtime_record *entry;
+			entry=(struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record),GFP_KERNEL);
+			entry->runtime = 0;
+			entry->vcpu_idx = i;
+			entry->state = UNLINE;
+			list_add(&entry->lnode,&vcpu_runtimes->lnode);
+		}
+	}
+	for(int i = 0; i < KVM_IOAPIC_NUM_PINS; i++) {
+		runtime = kvm->tocod_irq_runtime_map->entries[i].runtime;
+		int idx = kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx;
+		if(runtime != -1) {
+			struct list_head *pos;
+			struct vcpu_runtime_record *entry;
+			list_for_each(pos,&vcpu_runtimes->lnode)
+			{
+				entry=list_entry(pos,struct vcpu_runtime_record, lnode);
+				if(entry->vcpu_idx == idx) {
+					entry->runtime += runtime;
+					break;
+				}
+			}
+		}
+	}
+	unsigned long long avg_runtime = 0;
+	int online_vcpu_num = 0;
+	struct list_head *pos;
+	struct vcpu_runtime_record *entry;
+	list_for_each(pos,&vcpu_runtimes->lnode)
+	{
+		entry=list_entry(pos,struct vcpu_runtime_record, lnode);
+		avg_runtime += entry->runtime;
+		online_vcpu_num++;
+	}
+	avg_runtime = avg_runtime / online_vcpu_num;
+	struct vcpu_runtime_record *vcpu_high;
+	vcpu_high = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
+	struct vcpu_runtime_record *vcpu_low;
+	vcpu_low = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
+	list_for_each(pos,&vcpu_runtimes->lnode)
+	{
+		entry=list_entry(pos,struct vcpu_runtime_record, lnode);
+		if(entry->runtime > avg_runtime) {
+			entry->state = HIGH;
+			list_add(&entry->lnode,&vcpu_high->lnode);
+		}
+		else {
+			entry->state = LOW;
+			list_add(&entry->lnode,&vcpu_low->lnode);
+		}
+	}
+	list_for_each(pos,&vcpu_high->lnode)
+	{
+		entry=list_entry(pos,struct vcpu_runtime_record, lnode);
+		irq_high2low(entry, vcpu_low, kvm, avg_runtime);
+	}
+
+}
+EXPORT_SYMBOL(kvm_remap_for_balance);
+
+
 //TODO find the longest life one intsead of just check if it is running
 
 int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 {
+	printk("kvm_vcpu_young\n");
 	unsigned int i;
 	struct kvm_vcpu *vcpu;
 	struct list_head *pos;
@@ -161,36 +299,14 @@ int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 	}
 	else
 	{
-		int if_find = 0;
-		int vcpu_fifo;
-		if(kvm->active_vcpus == NULL) {
-			printk("active vcpus is null\n");
-		} else {
-			vcpu_fifo = get_thy_vcpu(kvm->active_vcpus);
-			if(vcpu_fifo == -1) {
-				printk("No active vcpus\n");
-			} else {
-				struct kvm_vcpu *vcpu_find = kvm->vcpus[vcpu_fifo];
-				IO_vcpu = find_get_task_by_vpid(vcpu_find->pid->numbers[0].nr);
-				if(sched_check_task_is_running(IO_vcpu))
-				{
-					ret = 1 << vcpu->vcpu_id;
-					irq_vcpu=vcpu_find->pid->numbers[0].nr;
-					vcpuID=vcpu_find->vcpu_id;
-					if_find = 1;
-				}
-			}
-		}
-		if(if_find == 0) {
-			kvm_for_each_vcpu(i, vcpu, kvm) {
-				IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
-				if(sched_check_task_is_running(IO_vcpu))
-				{
-					ret = 1 << vcpu->vcpu_id;
-					vcpuID=vcpu->vcpu_id;
-					irq_vcpu=vcpu->pid->numbers[0].nr;
-					break;
-				}
+		kvm_for_each_vcpu(i, vcpu, kvm) {
+			IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
+			if(sched_check_task_is_running(IO_vcpu))
+			{
+				ret = 1 << vcpu->vcpu_id;
+				vcpuID=vcpu->vcpu_id;
+				irq_vcpu=vcpu->pid->numbers[0].nr;
+				break;
 			}
 		}
 	}
@@ -263,6 +379,7 @@ void boost_IO_vcpu(struct kvm *kvm, int vcpu_pid, int dest_id)
 		sched_force_schedule(IO_vcpu,1);
     else
 	{
+		printk("boost_IO_vcpu: BOOST\n");
         IO_vcpu->lucky_guy+=1; //if I have a IPI, I will get more time
 	}
 
@@ -308,6 +425,7 @@ void boost_IRQ_vcpu(int vcpu_pid)
 	{
 		if(vcfs_timer2)
 		{
+			printk("boost_IRQ_vcpu: BOOST\n");
 	        IRQ_vcpu->lucky_guy+=1;
 //			IRQ_vcpu->boost_heap+=1;
 		}

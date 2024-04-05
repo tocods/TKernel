@@ -287,7 +287,7 @@ struct kvm_vcpu {
 	bool valid_wakeup;
     // to ensure the fairness of vcpu
 	unsigned long long debts;
-
+	
 #ifdef CONFIG_HAS_IOMEM
 	int mmio_needed;
 	int mmio_read_completed;
@@ -652,13 +652,35 @@ static inline struct fifo_queue *del_thy_vcpu(struct fifo_queue *myqueue, int da
     return del_thy_if_exist(myqueue, data);
 }
 
+// use for irq_balance
+struct tocod_balance_redirect_entry {
+	u8 dest_vcpu_idx;
+	u8 dest_id;
+};
+
+struct tocod_balance_redirect_map {
+	int vcpu_num;
+	struct tocod_balance_redirect_entry entries[KVM_IOAPIC_NUM_PINS];
+};
+
+struct tocod_irq_runtime_entry {
+	u8 dest_vcpu_idx;
+	u8 dest_id;
+	unsigned long long runtime;
+};
+
+struct tocod_irq_runtime_map {
+	int vcpu_num;
+	struct tocod_irq_runtime_entry entries[KVM_IOAPIC_NUM_PINS];
+};
+
 struct kvm {
 	spinlock_t mmu_lock;
 	struct mutex slots_lock;
 	struct mm_struct *mm; /* userspace tied to this vm */
 	struct kvm_memslots __rcu *memslots[KVM_ADDRESS_SPACE_NUM];
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
-
+	struct 
 	/*
 	 * created_vcpus is protected by kvm->lock, and is incremented
 	 * at the beginning of KVM_CREATE_VCPU.  online_vcpus is only
@@ -673,10 +695,16 @@ struct kvm {
 	struct kvm_io_bus __rcu *buses[KVM_NR_BUSES];
 
 	// 先进先出的活跃vCPU队列，队列中每一个节点存放的是vCPU在vcpus数组中的索引
-	struct fifo_queue *active_vcpus;
+	int active_vcpus;
 
 	// 先进先出的非活跃vCPU队列，队列中每一个节点存放的是vCPU在vcpus数组中的索引
-	struct fifo_queue *inactive_vcpus;
+	int inactive_vcpus;
+	// TODO: how to init the value
+	struct tocod_balance_redirect_map *tocod_balance_redirect_map;
+
+	struct tocod_irq_runtime_map *tocod_irq_runtime_map;
+
+	
 	
 #ifdef CONFIG_HAVE_KVM_EVENTFD
 	struct {

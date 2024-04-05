@@ -168,6 +168,7 @@ int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
 			      struct kvm *kvm, int irq_source_id, int level,
 			      bool line_status)
 {
+	//printk(" %s before irq dest_id %u vector %u\n",__func__,e->dest_id,e->vector);
 	struct kvm_lapic_irq irq;
 	int r;
 	int dest;
@@ -222,7 +223,7 @@ int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
                                                 (int)kvm->userspace_pid);
                 boost_IRQ_vcpu(kvm->vcpus[order_base_2(irq.dest_id)]->pid->numbers[0].nr);
 			}
-//			printk(" %s after irq dest_id %u vector %u\n",__func__,irq.dest_id,irq.vector);
+			printk(" %s after irq dest_id %u vector %u\n",__func__,irq.dest_id,irq.vector);
         }
 		/*
 		else
