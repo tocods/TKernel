@@ -446,7 +446,14 @@ static int ioapic_service(struct kvm_ioapic *ioapic, int irq, bool line_status)
 	
 	if (irqe.trig_mode == IOAPIC_EDGE_TRIG)
 		ioapic->irr_delivered |= 1 << irq;
-
+	int i;
+	struct kvm_vcpu *vcpu;
+	struct kvm *k = ioapic->kvm;
+	/*kvm_for_each_vcpu(i, vcpu, ioapic->kvm) {
+		if(k->tocod_irq_runtime_map->entries[irq].dest_id == irqe.dest_id ||
+			k->tocod_irq_runtime_map->entries[irq].dest_vcpu_idx == vcpu->vcpu_idx)
+			k->tocod_irq_runtime_map->entries[irq].runtime ++;
+	}*/
 	if (irq == RTC_GSI && line_status) {
 		/*
 		 * pending_eoi cannot ever become negative (see

@@ -3209,7 +3209,9 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 	}
 
 	kvm->vcpus[vcpu->vcpu_idx] = vcpu;
-	
+	struct tocod_irq_runtime_entry *entry = kzalloc(sizeof(struct tocod_irq_runtime_entry), GFP_KERNEL);
+	entry->runtime = 0;
+	kvm->vcpus_irq_runtime[vcpu->vcpu_idx] = entry;
 	/*
 	 * Pairs with smp_rmb() in kvm_get_vcpu.  Write kvm->vcpus
 	 * before kvm->online_vcpu's incremented value.
@@ -4792,6 +4794,8 @@ struct kvm_vcpu *preempt_notifier_to_vcpu(struct preempt_notifier *pn)
 	return container_of(pn, struct kvm_vcpu, preempt_notifier);
 }
 
+
+
 static void kvm_sched_in(struct preempt_notifier *pn, int cpu)
 {
 	struct kvm_vcpu *vcpu = preempt_notifier_to_vcpu(pn);
@@ -4802,6 +4806,7 @@ static void kvm_sched_in(struct preempt_notifier *pn, int cpu)
 	//del_thy_vcpu(vcpu->kvm->inactive_vcpus, vcpu->vcpu_idx);
 	//vcpu->kvm->inactive_vcpus = q_after_remove;
 	//printk("kvm_sched_in:cpu: %d\n", vcpu->vcpu_idx);
+	//kvm_remap_for_balance(vcpu->kvm, vcpu->vcpu_idx, 1);
 	WRITE_ONCE(vcpu->preempted, false);
 	WRITE_ONCE(vcpu->ready, false);
 
@@ -4820,6 +4825,8 @@ static void kvm_sched_out(struct preempt_notifier *pn,
     //del_thy_vcpu(vcpu->kvm->active_vcpus, vcpu->vcpu_idx);
 	//vcpu->kvm->active_vcpus = q_after_remove;
 	//printk("kvm_sched_out:cpu: %d\n", vcpu->vcpu_idx);
+
+	//kvm_remap_for_balance(vcpu->kvm, vcpu->vcpu_idx, 0);
 	if (current->state == TASK_RUNNING) {
 		WRITE_ONCE(vcpu->preempted, true);
 		WRITE_ONCE(vcpu->ready, true);

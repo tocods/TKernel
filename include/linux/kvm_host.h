@@ -699,10 +699,12 @@ struct kvm {
 
 	// 先进先出的非活跃vCPU队列，队列中每一个节点存放的是vCPU在vcpus数组中的索引
 	int inactive_vcpus;
-	// TODO: how to init the value
+	// no use
 	struct tocod_balance_redirect_map *tocod_balance_redirect_map;
-
+	// no use
 	struct tocod_irq_runtime_map *tocod_irq_runtime_map;
+
+	struct tocod_irq_runtime_entry *vcpus_irq_runtime[KVM_MAX_VCPUS];
 
 	
 	

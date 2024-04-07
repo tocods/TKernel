@@ -208,13 +208,28 @@ void irq_high2low(struct vcpu_runtime_record *high, struct vcpu_runtime_record *
 	}
 }
 
-int kvm_remap_for_balance(struct kvm *kvm) {
+/*
+ * Remap the IRQs to the vcpus with lower runtime
+ * active: 1 for sched_in, 0 for sched_out
+*/
+void kvm_remap_for_balance(struct kvm *kvm, int idx, int active) {
 	int vcpu_num = atomic_read(&kvm->online_vcpus);
 	struct vcpu_runtime_record *vcpu_runtimes;
 	vcpu_runtimes = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
     unsigned long long runtime = 0;
 	for(int i = 0; i < vcpu_num; i++) {
+		if(i == idx && active == 1) {
+			struct vcpu_runtime_record *entry;
+			entry=(struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record),GFP_KERNEL);
+			entry->runtime = 0;
+			entry->vcpu_idx = i;
+			entry->state = UNLINE;
+			list_add(&entry->lnode,&vcpu_runtimes->lnode);
+			continue;
+		}
 		if(check_vcpu_is_online(kvm->vcpus[i])){
+			if(idx == i && active == 0)
+				continue;
 			struct vcpu_runtime_record *entry;
 			entry=(struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record),GFP_KERNEL);
 			entry->runtime = 0;
@@ -273,11 +288,19 @@ int kvm_remap_for_balance(struct kvm *kvm) {
 	}
 
 }
-EXPORT_SYMBOL(kvm_remap_for_balance);
 
 
-//TODO find the longest life one intsead of just check if it is running
 
+int get_score(struct kvm_vcpu *vcpu) {
+	struct task_struct *tsk = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
+	int last_IO_point = tsk->running_io;
+	int now_IO_point = tsk->lucky_guy;
+	int io_confidence_point = tsk->boost_heap;
+	
+	return vcpu->kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime;
+}
+
+//TODO: find the longest life one intsead of just check if it is running
 int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 {
 	printk("kvm_vcpu_young\n");
@@ -292,24 +315,26 @@ int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 		dest_id = (1 << (kvm->created_vcpus-1)); 
 	vcpu=kvm->vcpus[order_base_2(dest_id)];
 	IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
-	if(sched_check_task_is_running(IO_vcpu))
-	{
-		ret = dest_id;
-		irq_vcpu=vcpu->pid->numbers[0].nr;
-	}
-	else
-	{
-		kvm_for_each_vcpu(i, vcpu, kvm) {
-			IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
-			if(sched_check_task_is_running(IO_vcpu))
-			{
-				ret = 1 << vcpu->vcpu_id;
-				vcpuID=vcpu->vcpu_id;
-				irq_vcpu=vcpu->pid->numbers[0].nr;
-				break;
-			}
+	struct kvm_vcpu *vcpu_chose = NULL;
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
+		if(sched_check_task_is_running(IO_vcpu))
+		{
+			if(vcpu_chose && get_score(vcpu) > get_score(vcpu_chose))	
+				vcpu_chose = vcpu;
+			else if(!vcpu_chose)
+				vcpu_chose = vcpu;
+			//break;
 		}
 	}
+	if(vcpu_chose) {
+		return 1 << vcpu_chose->vcpu_id;
+	} else {
+		return dest_id;
+	}
+	/*ret = 1 << vcpu->vcpu_id;
+	vcpuID=vcpu->vcpu_id;
+	irq_vcpu=vcpu->pid->numbers[0].nr;*/
     /*
 	list_for_each(pos,&irq_list->lnode)
         {
@@ -329,9 +354,7 @@ int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 			}
                 }
         }
-*/
-	return ret;
-	
+*/	
 }
 EXPORT_SYMBOL(kvm_vcpu_young);
 void boost_IO_vcpu(struct kvm *kvm, int vcpu_pid, int dest_id)
