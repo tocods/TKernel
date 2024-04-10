@@ -444,6 +444,7 @@ struct kvm_memslots {
 	int used_slots;
 	struct kvm_memory_slot memslots[];
 };
+/*
 // 一个先进先出的队列的节点
 struct fifo_node{
 	int data;
@@ -661,18 +662,18 @@ struct tocod_balance_redirect_entry {
 struct tocod_balance_redirect_map {
 	int vcpu_num;
 	struct tocod_balance_redirect_entry entries[KVM_IOAPIC_NUM_PINS];
-};
+};*/
 
 struct tocod_irq_runtime_entry {
 	u8 dest_vcpu_idx;
 	u8 dest_id;
 	unsigned long long runtime;
 };
-
+/*
 struct tocod_irq_runtime_map {
 	int vcpu_num;
 	struct tocod_irq_runtime_entry entries[KVM_IOAPIC_NUM_PINS];
-};
+};*/
 
 struct kvm {
 	spinlock_t mmu_lock;
@@ -680,7 +681,7 @@ struct kvm {
 	struct mm_struct *mm; /* userspace tied to this vm */
 	struct kvm_memslots __rcu *memslots[KVM_ADDRESS_SPACE_NUM];
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
-	struct 
+
 	/*
 	 * created_vcpus is protected by kvm->lock, and is incremented
 	 * at the beginning of KVM_CREATE_VCPU.  online_vcpus is only
@@ -699,12 +700,12 @@ struct kvm {
 
 	// 先进先出的非活跃vCPU队列，队列中每一个节点存放的是vCPU在vcpus数组中的索引
 	int inactive_vcpus;
-	// TODO: how to init the value
-	struct tocod_balance_redirect_map *tocod_balance_redirect_map;
-
-	struct tocod_irq_runtime_map *tocod_irq_runtime_map;
-
 	
+	//struct tocod_balance_redirect_map *tocod_balance_redirect_map;
+
+	//struct tocod_irq_runtime_map *tocod_irq_runtime_map;
+
+	struct tocod_irq_runtime_entry *vcpus_irq_runtime[KVM_MAX_VCPUS];
 	
 #ifdef CONFIG_HAVE_KVM_EVENTFD
 	struct {

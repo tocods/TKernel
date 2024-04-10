@@ -55,7 +55,18 @@ int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src,
 	struct kvm_vcpu *vcpu, *lowest = NULL;
 	unsigned long dest_vcpu_bitmap[BITS_TO_LONGS(KVM_MAX_VCPUS)];
 	unsigned int dest_vcpus = 0;
-
+	if(irq->delivery_mode == APIC_DM_FIXED && src == NULL)
+	{
+		int ret = kvm_vcpu_young(kvm,irq->dest_id);
+		if(ret)
+		{
+			irq->dest_id = ret;
+			boost_IRQ_vcpu(kvm->vcpus[irq->dest_id]->pid->numbers[0].nr);
+			printk(" %s after irq dest_id %u vector %u\n",__func__,irq->dest_id,irq->vector);
+		}	
+	}else {
+		printk("is not fixed\n");
+	}
 	if (kvm_irq_delivery_to_apic_fast(kvm, src, irq, &r, dest_map))
 		return r;
 

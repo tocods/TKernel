@@ -27,6 +27,8 @@ int thy_print_flag=0;
 int HIGH = 1;
 int LOW = 2;
 int UNLINE = 0;
+int balance_weight = 5;
+int io_weight = 5;
 static int _counter, _counter2;
 static struct vcpu_io *vcpu_list;
 static struct kvm_irq_vcpu *irq_list;
@@ -157,131 +159,38 @@ struct vcpu_runtime_record {
 	struct list_head lnode;
 };
 
-int cmpfunc (const void * a, const void * b)
-{
-    struct vcpu_runtime_record *da1 = (struct vcpu_runtime_record *)a;
-    struct vcpu_runtime_record *da2 = (struct vcpu_runtime_record *)b;
- 
-    if(da1->runtime > da2->runtime)
-        return 1;
-    else if(da1->runtime < da2->runtime)
-        return -1;
-    else
-        return 0;
+int get_score(struct kvm_vcpu *vcpu, unsigned long long max_runtime, unsigned long long min_runtime) {
+	struct task_struct *tsk = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
+	unsigned long long runtime = vcpu->kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime;
+	int last_IO_point = tsk->running_io;
+	int now_IO_point = tsk->lucky_guy;
+	int io_confidence_point = tsk->boost_heap;
+	int if_running = 0;
+	int if_io_vcpu = 0;
+	if(sched_check_task_is_running(tsk)) {
+		if_running = 1;
+	}
+	if(io_confidence_point > yield_level) {
+		if_io_vcpu = 10;
+	}else if(yield_level > 0) {
+		if_io_vcpu = (10 * io_confidence_point) / yield_level;
+	}
+	int balance_score = 10;
+	if(max_runtime != min_runtime && runtime > 0) {
+		balance_score = (10 * (runtime - min_runtime)) / (max_runtime - min_runtime);
+	}
+	balance_score = 10 - balance_score;
+	int io_score = if_running * if_io_vcpu;
+	printk("vcpu %d, balance_score %d, io_score %d, if_running %d, min %d, max %d, runtime %d\n", vcpu->vcpu_idx, balance_score, io_score, if_running, min_runtime, max_runtime, runtime);
+	return balance_score * balance_weight + io_score * io_weight;
 }
-
-void irq_high2low(struct vcpu_runtime_record *high, struct vcpu_runtime_record *lows, struct kvm *kvm, unsigned long long avg) {
-	unsigned long long runtime = 0;
-	struct list_head *pos;
-	struct vcpu_runtime_record *entry;
-	for(int i = 0; i < KVM_IOAPIC_NUM_PINS; i++) {
-		unsigned long long runtime = kvm->tocod_irq_runtime_map->entries[i].runtime;
-		int idx = kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx;
-		if(idx != high->vcpu_idx)
-			continue;
-		if(runtime != -1) {
-			int if_remap = 0;
-			list_for_each(pos,&lows->lnode)
-			{
-				entry=list_entry(pos,struct vcpu_runtime_record, lnode);
-				if(entry->runtime + runtime < avg_runtime) {
-					entry->runtime += runtime;
-					kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx = entry->vcpu_idx;
-					if_remap = 1;
-					break;
-				} else {
-					entry->runtime += avg_runtime;
-					kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx = entry->vcpu_idx;
-					if_remap = 1;
-					list_del(&entry->lnode);
-					break;
-				}
-			}
-			if(if_remap) {
-				high->runtime -= runtime;
-				if(high->runtime > avg_runtime) {
-					continue;
-				}
-				break;
-			} 
-		}
-	}
-}
-
-int kvm_remap_for_balance(struct kvm *kvm) {
-	int vcpu_num = atomic_read(&kvm->online_vcpus);
-	struct vcpu_runtime_record *vcpu_runtimes;
-	vcpu_runtimes = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
-    unsigned long long runtime = 0;
-	for(int i = 0; i < vcpu_num; i++) {
-		if(check_vcpu_is_online(kvm->vcpus[i])){
-			struct vcpu_runtime_record *entry;
-			entry=(struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record),GFP_KERNEL);
-			entry->runtime = 0;
-			entry->vcpu_idx = i;
-			entry->state = UNLINE;
-			list_add(&entry->lnode,&vcpu_runtimes->lnode);
-		}
-	}
-	for(int i = 0; i < KVM_IOAPIC_NUM_PINS; i++) {
-		runtime = kvm->tocod_irq_runtime_map->entries[i].runtime;
-		int idx = kvm->tocod_irq_runtime_map->entries[i].dest_vcpu_idx;
-		if(runtime != -1) {
-			struct list_head *pos;
-			struct vcpu_runtime_record *entry;
-			list_for_each(pos,&vcpu_runtimes->lnode)
-			{
-				entry=list_entry(pos,struct vcpu_runtime_record, lnode);
-				if(entry->vcpu_idx == idx) {
-					entry->runtime += runtime;
-					break;
-				}
-			}
-		}
-	}
-	unsigned long long avg_runtime = 0;
-	int online_vcpu_num = 0;
-	struct list_head *pos;
-	struct vcpu_runtime_record *entry;
-	list_for_each(pos,&vcpu_runtimes->lnode)
-	{
-		entry=list_entry(pos,struct vcpu_runtime_record, lnode);
-		avg_runtime += entry->runtime;
-		online_vcpu_num++;
-	}
-	avg_runtime = avg_runtime / online_vcpu_num;
-	struct vcpu_runtime_record *vcpu_high;
-	vcpu_high = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
-	struct vcpu_runtime_record *vcpu_low;
-	vcpu_low = (struct vcpu_runtime_record*)kmalloc(sizeof(struct vcpu_runtime_record), GFP_KERNEL);
-	list_for_each(pos,&vcpu_runtimes->lnode)
-	{
-		entry=list_entry(pos,struct vcpu_runtime_record, lnode);
-		if(entry->runtime > avg_runtime) {
-			entry->state = HIGH;
-			list_add(&entry->lnode,&vcpu_high->lnode);
-		}
-		else {
-			entry->state = LOW;
-			list_add(&entry->lnode,&vcpu_low->lnode);
-		}
-	}
-	list_for_each(pos,&vcpu_high->lnode)
-	{
-		entry=list_entry(pos,struct vcpu_runtime_record, lnode);
-		irq_high2low(entry, vcpu_low, kvm, avg_runtime);
-	}
-
-}
-EXPORT_SYMBOL(kvm_remap_for_balance);
-
-
-//TODO find the longest life one intsead of just check if it is running
 
 int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 {
-	printk("kvm_vcpu_young\n");
+	printk("kvm_vcpu_young origin id: %d\n", dest_id);
 	unsigned int i;
+	unsigned long long max_runtime = 0;
+	unsigned long long min_runtime = ULLONG_MAX;
 	struct kvm_vcpu *vcpu;
 	struct list_head *pos;
 	struct kvm_irq_vcpu *irq;
@@ -292,24 +201,32 @@ int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 		dest_id = (1 << (kvm->created_vcpus-1)); 
 	vcpu=kvm->vcpus[order_base_2(dest_id)];
 	IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
-	if(sched_check_task_is_running(IO_vcpu))
-	{
-		ret = dest_id;
-		irq_vcpu=vcpu->pid->numbers[0].nr;
-	}
-	else
-	{
-		kvm_for_each_vcpu(i, vcpu, kvm) {
-			IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
-			if(sched_check_task_is_running(IO_vcpu))
-			{
-				ret = 1 << vcpu->vcpu_id;
-				vcpuID=vcpu->vcpu_id;
-				irq_vcpu=vcpu->pid->numbers[0].nr;
-				break;
-			}
+	struct kvm_vcpu *vcpu_chose = NULL;
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		if(kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime > max_runtime) {
+			max_runtime = kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime;
+		}
+		if(kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime < min_runtime) {
+			min_runtime = kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime;
 		}
 	}
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		IO_vcpu = find_get_task_by_vpid(vcpu->pid->numbers[0].nr);
+		if(vcpu_chose && get_score(vcpu, max_runtime, min_runtime) > get_score(vcpu_chose, max_runtime, min_runtime)) 
+			vcpu_chose = vcpu;
+		else if(!vcpu_chose)
+			vcpu_chose = vcpu;
+		//break;
+	}
+	if(vcpu_chose) {
+		printk("kvm_vcpu_young final vcpu_id: %d, vcpu_idx:%d\n", vcpu_chose->vcpu_id, vcpu_chose->vcpu_idx);
+		return vcpu_chose->vcpu_id;
+	} else {
+		return dest_id;
+	}
+	/*ret = 1 << vcpu->vcpu_id;
+	vcpuID=vcpu->vcpu_id;
+	irq_vcpu=vcpu->pid->numbers[0].nr;*/
     /*
 	list_for_each(pos,&irq_list->lnode)
         {
@@ -329,9 +246,7 @@ int kvm_vcpu_young(struct kvm *kvm, int dest_id)
 			}
                 }
         }
-*/
-	return ret;
-	
+*/	
 }
 EXPORT_SYMBOL(kvm_vcpu_young);
 void boost_IO_vcpu(struct kvm *kvm, int vcpu_pid, int dest_id)
@@ -433,25 +348,7 @@ void boost_IRQ_vcpu(int vcpu_pid)
 	
 }
 EXPORT_SYMBOL(boost_IRQ_vcpu);
-//add vhost pid to each vcpu structure 
-/*
-int list_table_update_vhost_pid(int vhost_pid, int kvm_pid)
-{
-        struct list_head *pos;
-        struct vcpu_io *entry;
-        int vcpu_pid;
 
-        list_for_each(pos,&vcpu_list->lnode)
-        {
-                entry=list_entry(pos,struct vcpu_io, lnode);
-		if(entry->kvm_pid == kvm_pid)
-			entry->vhost_pid = vhost_pid;
-        }
-        return 0;
-
-}
-EXPORT_SYMBOL(list_table_update_vhost_pid);
-*/
 int list_table_vcpu_have(int pid)
 {
 	struct vcpu_io *cur;
@@ -651,6 +548,7 @@ int IRQ_redirect_log=0;
 int IRQ_redirect_noboost =0;
 int IRQ_redirect_onlyredirect=0;
 int fake_yield_flag=0;
+int runtime_rate = 5;
 int vcfs_timer3=0;
 int vcfs_timer4=0;
 int burrito_flag =0;
@@ -751,7 +649,56 @@ static int if_printk(struct seq_file *m, void *v)
 		seq_printf(m, "thy_print_flag %d\n",thy_print_flag);
 		return 0;
 }
-
+static int add_balance_weight(struct seq_file *m, void *v)
+{
+		balance_weight+=1;
+		io_weight-=1;
+		if(balance_weight>10)
+		{
+			balance_weight=10;
+			io_weight=0;
+		}
+		if(io_weight<0)
+		{
+			io_weight=0;
+			balance_weight=10;
+		}
+		seq_printf(m, "balance_weight %d, io_weight %d\n",balance_weight, io_weight);
+		return 0;
+}
+static int del_balance_weight(struct seq_file *m, void *v)
+{
+		balance_weight-=1;
+		io_weight+=1;
+		if(balance_weight>10)
+		{
+			balance_weight=10;
+			io_weight=0;
+		}
+		if(io_weight<0)
+		{
+			io_weight=0;
+			balance_weight=10;
+		}
+		seq_printf(m, "balance_weight %d, io_weight %d\n",balance_weight, io_weight);
+		return 0;
+}
+static int add_runtime_rate(struct seq_file *m, void *v) 
+{
+	runtime_rate += 1;
+	if(runtime_rate > 10)
+		runtime_rate = 10;
+	seq_printf(m, "runtime_rate %d\n",runtime_rate);
+	return 0;
+}
+static int del_runtime_rate(struct seq_file *m, void *v) 
+{
+	runtime_rate -= 1;
+	if(runtime_rate < 0)
+		runtime_rate = 0;
+	seq_printf(m, "runtime_rate %d\n",runtime_rate);
+	return 0;
+}
 static int fake_yield(struct seq_file *m, void *v)
 {
         if(fake_yield_flag)
@@ -1054,6 +1001,10 @@ static int __init proc_cmdline_init(void)
     proc_create_single("Vcfs_timer",0 , NULL, time_check);
     proc_create_single("Vcfs_timer2",0 , NULL, time_check2);
 	proc_create_single("Thy_print_flag", 0, NULL, if_printk);
+	proc_create_single("Add_balance_weight", 0, NULL, add_balance_weight);
+	proc_create_single("Del_balance_weight", 0, NULL, del_balance_weight);
+	proc_create_single("Add_runtiem_rate", 0, NULL, add_runtime_rate);
+	proc_create_single("Del_runtiem_rate", 0, NULL, del_runtime_rate);
     proc_create_single("Vcfs_timer3",0 , NULL, time_check3);
 	proc_create_single("Vcfs_timer4",0 , NULL, time_check44);
 

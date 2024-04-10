@@ -1138,7 +1138,7 @@ static int __apic_accept_irq(struct kvm_lapic *apic, int delivery_mode,
 				kvm_lapic_clear_vector(vector,
 						       apic->regs + APIC_TMR);
 		}
-
+		vcpu->kvm->vcpus_irq_runtime[vcpu->vcpu_idx]->runtime += 1;
 		if (kvm_x86_ops.deliver_posted_interrupt(vcpu, vector)) {
 			kvm_lapic_set_irr(vector, apic);
 			kvm_make_request(KVM_REQ_EVENT, vcpu);
